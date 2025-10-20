@@ -1,0 +1,30 @@
+name: Security Audit
+
+on:
+  push:
+    paths:
+      - '_data/chains/**'
+      - 'scripts/security_audit.py'
+  pull_request:
+    paths:
+      - '_data/chains/**'
+      - 'scripts/security_audit.py'
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run security audit script
+        run: python scripts/security_audit.py
