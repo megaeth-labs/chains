@@ -80,6 +80,16 @@ There are also aggregated json files with all chains automatically assembled:
  * https://chainid.network/chains.json
  * https://chainid.network/chains_mini.json (miniaturized - fewer fields for smaller filesize)
 
+## Aggregation of Chain Data
+
+All chain metadata from `_data/chains/` is automatically aggregated into a single JSON file (e.g., `aggregated-chains.json`) using the Kotlin-based build script. To run aggregation locally:
+
+1. Ensure you have Gradle installed or use the wrapper.
+2. Run `./gradlew aggregate` (assuming the task exists; adjust if needed based on build.gradle).
+3. The output will be in `build/aggregated/` or similar.
+
+This process validates uniqueness of `shortName`, `name`, and `chainId` to prevent collisions. For details, see `src/main/kotlin/Aggregator.kt` (if present).
+
 ## Constraints
 
  * the shortName and name MUST be unique - see e.g. EIP-3770 on why
