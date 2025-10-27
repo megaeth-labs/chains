@@ -155,3 +155,11 @@ npx prettier --write _data/*/*.json
  * [Smart Contract UI](https://xtools-at.github.io/smartcontract-ui)
 
  * Your project - contact us to add it here!
+
+ Minor update to keep RPC endpoints up to date for reliability and consistency.
+
+- Updated Arbitrum RPC → https://arb1.arbitrum.io/rpc
+- Updated Base RPC → https://mainnet.base.org
+
+No structural changes.
+
