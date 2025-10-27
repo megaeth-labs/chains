@@ -33,7 +33,7 @@ The source data is in _data/chains. Each chain has its own file with the filenam
 }
 ```
 
-When an icon is used in either the network or an explorer, there must be a JSON in _data/icons with the name used.
+When an icon is used in either the network or an explorer, there must be a JSON file in _data/icons with the name used.
 (e.g. in the above example there must be a `ethereum.json` and a `etherscan.json` in there) - The icon JSON files look like this:
 
 ```json
