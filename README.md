@@ -1,4 +1,4 @@
-# EVM-based Chains
+ # EVM-based Chains
 
 The source data is in _data/chains. Each chain has its own file with the filename being the [CAIP-2](https://github.com/ChainAgnostic/CAIPs/blob/master/CAIPs/caip-2.md) representation as name and `.json` as extension.
 
@@ -131,10 +131,13 @@ npx prettier --write _data/*/*.json
  * [Minerva Wallet](https://minerva.digital)
 
 ### EIPs
- * EIP-155
- * EIP-3014
- * EIP-3770
- * EIP-4527
+* [EIP-155: Simple Replay Attack Protection](https://eips.ethereum.org/EIPS/eip-155)
+* [EIP-1559: Fee market change for ETH 1.0 chain](https://eips.ethereum.org/EIPS/eip-1559)
+* [EIP-3014: Eth Chain ID Registry](https://eips.ethereum.org/EIPS/eip-3014)
+* [EIP-3091: Blockchain explorer API standard](https://eips.ethereum.org/EIPS/eip-3091)
+* [EIP-3770: Chain-specific addresses](https://eips.ethereum.org/EIPS/eip-3770)
+* [EIP-4527: RPC Endpoints Metadata Standard](https://eips.ethereum.org/EIPS/eip-4527)
+
 
 ### Listing sites
  * [chainid.network](https://chainid.network) / [chainlist.wtf](https://chainlist.wtf)
