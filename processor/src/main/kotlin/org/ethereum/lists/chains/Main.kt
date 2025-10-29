@@ -1,7 +1,6 @@
 package org.ethereum.lists.chains
 
 import com.beust.klaxon.JsonArray
-import java.io.File
 import com.beust.klaxon.JsonObject
 import com.beust.klaxon.Klaxon
 import okhttp3.OkHttpClient
@@ -10,99 +9,116 @@ import org.ethereum.lists.chains.model.*
 import org.kethereum.erc55.isValid
 import org.kethereum.model.Address
 import org.kethereum.rpc.HttpEthereumRPC
+import java.io.File
+import java.io.FileReader
 import java.math.BigInteger
 import javax.imageio.ImageIO
-import kotlin.io.OnErrorAction.*
+import kotlin.io.OnErrorAction.SKIP
 
-val parsedShortNames = mutableSetOf<String>()
-val parsedNames = mutableSetOf<String>()
-
-val basePath = File("..")
-val dataPath = File(basePath, "_data")
-val iconsPath = File(dataPath, "icons")
-val iconsDownloadPath = File(dataPath, "iconsDownload")
-
-val chainsPath = File(dataPath, "chains")
-private val allFiles = chainsPath.listFiles() ?: error("${chainsPath.absolutePath} must contain the chain json files - but it does not")
-private val allChainFiles = allFiles.filter { !it.isDirectory }
-
-private val allIconFilesList = iconsPath.listFiles() ?: error("${iconsPath.absolutePath} must contain the icon json files - but it does not")
-private val allIconFiles = allIconFilesList.filter { !it.isDirectory }
+// --- Globals kept (minimized where possible) ---
+private val parsedShortNames = mutableSetOf<String>()
+private val parsedNames = mutableSetOf<String>()
 private val allUsedIcons = mutableSetOf<String>()
 
-val okHttpClient = OkHttpClient();
+private val basePath = File("..")
+private val dataPath = File(basePath, "_data")
+private val iconsPath = File(dataPath, "icons")
+private val iconsDownloadPath = File(dataPath, "iconsDownload")
+private val chainsPath = File(dataPath, "chains")
+
+private val klaxon = Klaxon()
+private val okHttpClient = OkHttpClient()
+
+// Fail early if structure missing
+private val allChainFiles: List<File> = chainsPath.listFiles()
+    ?.filter { it.isFile }
+    ?: error("${chainsPath.absolutePath} must contain the chain json files - but it does not")
+
+private val allIconFiles: List<File> = iconsPath.listFiles()
+    ?.filter { it.isFile }
+    ?: error("${iconsPath.absolutePath} must contain the icon json files - but it does not")
+
+// Constants
+private val HTTP_PREFIXES = setOf("https://", "http://")
+private val RPC_PREFIXES = setOf("https://", "http://", "wss://", "ws://")
+private val NAME_REGEX = Regex("^[a-zA-Z0-9\\-.() ]+$")
 
 fun main(args: Array<String>) {
-
     val argsList = args.toMutableList()
+    val verbose = argsList.remove("verbose")
 
-    val verbose = argsList.contains("verbose").also { argsList.remove("verbose") }
-    if (argsList.firstOrNull() == "singleChainCheck") {
-        val file = File(File(".."), args.last())
-        if (file.exists() && file.parentFile == chainsPath) {
-            println("checking single chain " + args.last())
-            checkChain(file, true, verbose)
+    when (argsList.firstOrNull()) {
+        "singleChainCheck" -> {
+            val last = argsList.lastOrNull() ?: return
+            val file = File(File(".."), last)
+            if (file.exists() && file.parentFile == chainsPath) {
+                println("checking single chain $last")
+                checkChain(file, onlineCheck = true, verbose = verbose)
+            } else {
+                error("File $last not found under ${chainsPath.absolutePath}")
+            }
         }
-    } else {
-        doChecks(
-            verbose = verbose,
-            onlineChecks = argsList.firstOrNull() == "rpcConnect",
-            doIconDownload = argsList.firstOrNull() == "iconDownload",
-        )
-        createOutputFiles()
+        else -> {
+            val online = argsList.firstOrNull() == "rpcConnect"
+            val doIconDownload = argsList.firstOrNull() == "iconDownload"
+
+            doChecks(onlineChecks = online, doIconDownload = doIconDownload, verbose = verbose)
+            createOutputFiles()
+        }
     }
 }
 
 private fun createOutputFiles() {
-    val buildPath = File(basePath, "output").apply { mkdir() }
+    val buildPath = File(basePath, "output").apply { mkdirs() }
 
     val chainJSONArray = JsonArray<JsonObject>()
     val miniChainJSONArray = JsonArray<JsonObject>()
-
     val chainIconJSONArray = JsonArray<JsonObject>()
-
     val shortNameMapping = JsonObject()
 
     // copy raw data so e.g. icons are available - SKIP errors
     File(basePath, "_data").copyRecursively(buildPath, onError = { _, _ -> SKIP })
+
+    // Parse chains once, sort, then emit
     allChainFiles
-        .map { Klaxon().parseJsonObject(it.reader()) }
+        .asSequence()
+        .map { file ->
+            FileReader(file).use { reader -> klaxon.parseJsonObject(reader) }
+        }
         .sortedBy { (it["chainId"] as Number).toLong() }
         .forEach { jsonObject ->
             chainJSONArray.add(jsonObject)
 
-            val miniJSON = JsonObject()
-            listOf("name", "chainId", "shortName", "networkId", "nativeCurrency", "rpc", "faucets", "infoURL").forEach { field ->
-                jsonObject[field]?.let { content ->
-                    miniJSON[field] = content
-                }
+            val mini = JsonObject()
+            listOf(
+                "name", "chainId", "shortName", "networkId",
+                "nativeCurrency", "rpc", "faucets", "infoURL"
+            ).forEach { field ->
+                jsonObject[field]?.let { mini[field] = it }
             }
-            miniChainJSONArray.add(miniJSON)
+            miniChainJSONArray.add(mini)
 
-            shortNameMapping[jsonObject["shortName"] as String] = "eip155:" + jsonObject["chainId"]
-
+            shortNameMapping[jsonObject["shortName"] as String] =
+                "eip155:${jsonObject["chainId"]}"
         }
 
-    allIconFiles
-        .forEach { iconLocation ->
+    // Icons bundle
+    allIconFiles.forEach { iconFile ->
+        if (iconFile.extension != "json") error("Icon must be json $iconFile")
+        val iconName = iconFile.nameWithoutExtension // faster/clearer
 
-            val jsonData = Klaxon().parseJsonArray(iconLocation.reader())
-
-            if (iconLocation.extension != "json") {
-                error("Icon must be json " + iconLocation)
-            }
-
-            val iconName = iconLocation.toString().removePrefix("../_data/icons/").removeSuffix(".json")
-
-            val iconJson = JsonObject()
-            iconJson["name"] = iconName
-            iconJson["icons"] = jsonData
-
-            chainIconJSONArray.add(iconJson)
+        val jsonData = FileReader(iconFile).use { reader ->
+            klaxon.parseJsonArray(reader)
         }
 
-    File(buildPath, "chains.json").writeText(chainJSONArray.toJsonString())
+        val iconJson = JsonObject().apply {
+            this["name"] = iconName
+            this["icons"] = jsonData
+        }
+        chainIconJSONArray.add(iconJson)
+    }
 
+    // Outputs
     File(buildPath, "chains.json").writeText(chainJSONArray.toJsonString())
     File(buildPath, "chains_pretty.json").writeText(chainJSONArray.toJsonString(prettyPrint = true))
 
@@ -119,21 +135,22 @@ private fun createOutputFiles() {
 }
 
 private fun doChecks(onlineChecks: Boolean, doIconDownload: Boolean, verbose: Boolean) {
+    // Chains
     allChainFiles.forEach { file ->
         try {
             checkChain(file, onlineChecks, verbose)
-        } catch (exception: Exception) {
+        } catch (e: Exception) {
             println("Problem with $file")
-            throw exception
+            throw e
         }
     }
 
+    // Icons
     val allIcons = iconsPath.listFiles() ?: return
     val allIconCIDs = mutableSetOf<String>()
-    allIcons.forEach {
-        checkIcon(it, doIconDownload, allIconCIDs, verbose)
-    }
+    allIcons.forEach { checkIcon(it, doIconDownload, allIconCIDs, verbose) }
 
+    // Detect unreferenced downloaded icons
     val unusedIconDownload = mutableSetOf<String>()
     iconsDownloadPath.listFiles()?.forEach {
         if (!allIconCIDs.contains(it.name)) unusedIconDownload.add(it.name)
@@ -141,104 +158,93 @@ private fun doChecks(onlineChecks: Boolean, doIconDownload: Boolean, verbose: Bo
     if (unusedIconDownload.isNotEmpty()) {
         throw UnreferencedIcon(unusedIconDownload.joinToString(" "), iconsDownloadPath)
     }
-    allFiles.filter { it.isDirectory }.forEach { _ ->
-        error("should not contain a directory")
+
+    // No directories allowed in chains dir
+    chainsPath.listFiles()?.filter { it.isDirectory }?.forEach { _ ->
+        error("chains directory must not contain sub-directories")
     }
 
+    // Detect unused icon descriptors
     val unusedIcons = mutableSetOf<String>()
     iconsPath.listFiles()?.forEach {
-        if (!allUsedIcons.contains(it.name.toString().removeSuffix(".json"))) {
-            unusedIcons.add(it.toString())
-        }
+        val base = it.nameWithoutExtension
+        if (!allUsedIcons.contains(base)) unusedIcons.add(it.toString())
     }
     if (unusedIcons.isNotEmpty()) {
         error("error: unused icons ${unusedIcons.joinToString(" ")}")
     }
 }
 
-fun checkIcon(icon: File, withIconDownload: Boolean, allIconCIDs: MutableSet<String>, verbose: Boolean) {
-    val obj: JsonArray<*> = Klaxon().parseJsonArray(icon.reader())
+private fun checkIcon(icon: File, withIconDownload: Boolean, allIconCIDs: MutableSet<String>, verbose: Boolean) {
+    val arr: JsonArray<*> = FileReader(icon).use { reader -> klaxon.parseJsonArray(reader) }
     if (verbose) {
-        println("checking Icon " + icon.name)
-        println("found variants " + obj.size)
+        println("checking Icon ${icon.name}")
+        println("found variants ${arr.size}")
     }
-    obj.forEach { it ->
-        if (it !is JsonObject) {
-            error("Icon variant must be an object")
-        }
 
-        val url = it["url"] ?: error("Icon must have a URL")
+    arr.forEach { variant ->
+        val obj = variant as? JsonObject ?: error("Icon variant must be an object")
 
-        if (url !is String || !url.startsWith("ipfs://")) {
-            error("url must start with ipfs://")
-        }
-
-        allIconCIDs.add(url.removePrefix("ipfs://"))
+        val url = obj["url"] as? String ?: error("Icon must have a URL")
+        require(url.startsWith("ipfs://")) { "url must start with ipfs://" }
 
         val iconCID = url.removePrefix("ipfs://")
+        allIconCIDs.add(iconCID)
+
         val iconDownloadFile = File(iconsDownloadPath, iconCID)
 
         if (!iconDownloadFile.exists() && withIconDownload) {
-
             try {
-
                 println("fetching Icon from IPFS $iconCID")
-
                 val iconBytes = ipfs.get.catBytes(iconCID)
-                println("Icon size" + iconBytes.size)
-
-
-                iconDownloadFile.createNewFile()
+                println("Icon size ${iconBytes.size}")
                 iconDownloadFile.writeBytes(iconBytes)
             } catch (e: Exception) {
-                println("could not fetch icon from IPFS")
+                println("could not fetch icon from IPFS: ${e.message}")
             }
         }
 
-
-        val width = it["width"]
-        val height = it["height"]
+        val width = obj["width"]
+        val height = obj["height"]
         if (width != null || height != null) {
-            if (height == null || width == null) {
-                error("If icon has width or height it needs to have both")
-            }
-
-            if (width !is Int) {
-                error("Icon width must be Int")
-            }
-            if (height !is Int) {
-                error("Icon height must be Int")
+            require(width is Int && height is Int) {
+                "If icon has width/height it needs both and must be Int"
             }
         }
 
-        val format = it["format"]
-        if (format !is String || (!setOf("png", "svg", "jpg").contains(format))) {
-            error("Icon format must be a png, svg or jpg but was $format")
+        val format = obj["format"] as? String
+        require(format in setOf("png", "svg", "jpg")) {
+            "Icon format must be png, svg or jpg but was $format"
         }
 
         if (iconDownloadFile.exists()) {
             try {
-                val imageInputStream = ImageIO.createImageInputStream(iconDownloadFile)
-                val imageReader = ImageIO.getImageReaders(imageInputStream).next()
-                val image = ImageIO.read(imageInputStream)
-
-                val formatOfIconDownload = imageReader.formatName.replace("JPEG", "jpg")
-                if (formatOfIconDownload != format) {
-                    error("format in json ($icon) is $format but actually is in imageDownload $formatOfIconDownload")
-                }
-                if (image.width != width) {
-                    error("width in json ($icon) is $width but actually is in imageDownload ${image.width}")
+                // Determine actual format
+                val actualFormat = iconDownloadFile.inputStream().use { ins ->
+                    ImageIO.createImageInputStream(ins).use { iis ->
+                        val reader = ImageIO.getImageReaders(iis).asSequence().firstOrNull()
+                            ?: error("No ImageReader for $iconDownloadFile")
+                        reader.formatName.replace("JPEG", "jpg")
+                    }
                 }
 
-                if (image.raster.height != height) {
-                    error("height in json ($icon) is $height but actually is in imageDownload ${image.height}")
+                // Load image to check dimensions
+                val image = ImageIO.read(iconDownloadFile)
+                    ?: error("Could not read image $iconDownloadFile")
+
+                if (actualFormat != format) {
+                    error("format in json ($icon) is $format but found $actualFormat in imageDownload")
+                }
+                if (width is Int && image.width != width) {
+                    error("width in json ($icon) is $width but actual is ${image.width}")
+                }
+                if (height is Int && image.raster.height != height) {
+                    error("height in json ($icon) is $height but actual is ${image.height}")
                 }
 
                 if (!legacyCIDs.contains(iconDownloadFile.name)) {
                     val fileSize = iconDownloadFile.length()
-                    if (fileSize > 250 * 1024) {
-                        error("icon is bigger than 250kb")
-                    }
+                    if (fileSize > 250 * 1024) error("icon is bigger than 250kb")
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -248,303 +254,193 @@ fun checkIcon(icon: File, withIconDownload: Boolean, allIconCIDs: MutableSet<Str
     }
 }
 
-fun checkChain(chainFile: File, onlineCheck: Boolean, verbose: Boolean = false) {
-    if (verbose) {
-        println("processing $chainFile")
+private fun checkChain(chainFile: File, onlineCheck: Boolean, verbose: Boolean = false) {
+    if (verbose) println("processing $chainFile")
+
+    val jsonObject = FileReader(chainFile).use { reader ->
+        klaxon.parseJsonObject(reader)
     }
 
-    val jsonObject = Klaxon().parseJsonObject(chainFile.reader())
     val chainIdAsLong = getNumber(jsonObject, "chainId")
 
-    if (chainFile.nameWithoutExtension.startsWith("eip155-")) {
-        if (chainIdAsLong.toString() != chainFile.nameWithoutExtension.replace("eip155-", "")) {
-            throw (FileNameMustMatchChainId())
-        }
-    } else {
-        throw (UnsupportedNamespace())
-    }
+    // File name / namespace checks
+    val expectedPrefix = "eip155-"
+    require(chainFile.nameWithoutExtension.startsWith(expectedPrefix)) { "Unsupported namespace" }
+    val fromName = chainFile.nameWithoutExtension.removePrefix(expectedPrefix)
+    if (chainIdAsLong.toString() != fromName) throw FileNameMustMatchChainId()
+    require(chainFile.extension == "json") { throw ExtensionMustBeJSON() }
 
-    if (chainFile.extension != "json") {
-        throw (ExtensionMustBeJSON())
-    }
-
+    // Required/extra fields
     getNumber(jsonObject, "networkId")
-
     val extraFields = jsonObject.map.keys.subtract(mandatory_fields).subtract(optionalFields)
-    if (extraFields.isNotEmpty()) {
-        throw ShouldHaveNoExtraFields(extraFields)
-    }
+    if (extraFields.isNotEmpty()) throw ShouldHaveNoExtraFields(extraFields)
 
     val missingFields = mandatory_fields.subtract(jsonObject.map.keys)
-    if (missingFields.isNotEmpty()) {
-        throw ShouldHaveNoMissingFields(missingFields)
-    }
+    if (missingFields.isNotEmpty()) throw ShouldHaveNoMissingFields(missingFields)
 
-    jsonObject["icon"]?.let {
-        processIcon(it, chainFile)
-    }
+    jsonObject["icon"]?.let { processIcon(it, chainFile) }
 
-    val nameRegex = Regex("^[a-zA-Z0-9\\-.() ]+$")
     jsonObject["nativeCurrency"]?.let {
-        if (it !is JsonObject) {
-            throw NativeCurrencyMustBeObject()
-        }
-        val symbol = it["symbol"]
-        if (symbol !is String) {
-            throw NativeCurrencySymbolMustBeString()
-        }
-
-        if (symbol.trim() != symbol) {
-            throw NativeCurrencyCantBeTrimmed()
-        }
-
-        if (symbol.length >= 7) {
-            throw NativeCurrencySymbolMustHaveLessThan7Chars()
-        }
-        if (it.keys != setOf("symbol", "decimals", "name")) {
-            throw NativeCurrencyCanOnlyHaveSymbolNameAndDecimals()
-        }
-        if (it["decimals"] !is Int) {
-            throw NativeCurrencyDecimalMustBeInt()
-        }
-        val currencyName = it["name"]
-        if (currencyName !is String) {
-            throw NativeCurrencyNameMustBeString()
-        }
-
-        if (!nameRegex.matches(currencyName)) {
-            throw IllegalName("currencyName", currencyName)
-        }
+        if (it !is JsonObject) throw NativeCurrencyMustBeObject()
+        val symbol = it["symbol"] as? String ?: throw NativeCurrencySymbolMustBeString()
+        if (symbol.trim() != symbol) throw NativeCurrencyCantBeTrimmed()
+        if (symbol.length >= 7) throw NativeCurrencySymbolMustHaveLessThan7Chars()
+        if (it.keys != setOf("symbol", "decimals", "name")) throw NativeCurrencyCanOnlyHaveSymbolNameAndDecimals()
+        if (it["decimals"] !is Int) throw NativeCurrencyDecimalMustBeInt()
+        val currencyName = it["name"] as? String ?: throw NativeCurrencyNameMustBeString()
+        if (!NAME_REGEX.matches(currencyName)) throw IllegalName("currencyName", currencyName)
     }
 
-    val chainName = jsonObject["name"]
-    if (chainName !is String) {
-        throw ChainNameMustBeString()
-    }
+    val chainName = jsonObject["name"] as? String ?: throw ChainNameMustBeString()
+    if (!NAME_REGEX.matches(chainName)) throw IllegalName("chain name", chainName)
 
-    if (!nameRegex.matches(chainName)) {
-        throw IllegalName("chain name", chainName)
-    }
+    jsonObject["explorers"]?.let { explorers ->
+        if (explorers !is JsonArray<*>) throw ExplorersMustBeArray()
+        explorers.forEach { explorerAny ->
+            val explorer = explorerAny as? JsonObject ?: error("explorer must be object")
+            if (explorer["name"] == null) throw ExplorerMustHaveName()
 
-    jsonObject["explorers"]?.let {
-        if (it !is JsonArray<*>) {
-            throw (ExplorersMustBeArray())
-        }
+            explorer["icon"]?.let { explorerIcon -> processIcon(explorerIcon, chainFile) }
 
-        it.forEach { explorer ->
-            if (explorer !is JsonObject) {
-                error("explorer must be object")
-            }
-
-            if (explorer["name"] == null) {
-                throw (ExplorerMustHaveName())
-            }
-
-            explorer["icon"]?.let { explorerIcon ->
-                processIcon(explorerIcon, chainFile)
-            }
-
-            val url = explorer["url"]
-            if (url == null || url !is String || httpPrefixes.none { prefix -> url.startsWith(prefix) }) {
-                throw (ExplorerMustWithHttpsOrHttp())
-            }
-
-            if (url.endsWith("/")) {
-                throw ExplorerCannotEndInSlash()
-            }
-
+            val url = explorer["url"] as? String ?: throw ExplorerMustWithHttpsOrHttp()
+            if (HTTP_PREFIXES.none { prefix -> url.startsWith(prefix) }) throw ExplorerMustWithHttpsOrHttp()
+            if (url.endsWith("/")) throw ExplorerCannotEndInSlash()
             url.checkString("Explorer URL")
 
-            if (explorer["standard"] != "EIP3091" && explorer["standard"] != "none") {
-                throw (ExplorerStandardMustBeEIP3091OrNone())
-            }
+            val standard = explorer["standard"]
+            if (standard != "EIP3091" && standard != "none") throw ExplorerStandardMustBeEIP3091OrNone()
 
             if (onlineCheck) {
-                val request = Request.Builder().url(url).build();
-                val code = okHttpClient.newCall(request).execute().code
-                if (code / 100 != 2 && code != 403 ) { // etherscan throws a 403 because of cloudflare - so we need to allow it :cry
-                    throw (CantReachExplorerException(url, code))
+                val request = Request.Builder().url(url).build()
+                okHttpClient.newCall(request).execute().use { resp ->
+                    val code = resp.code
+                    if (code / 100 != 2 && code != 403) { // allow 403 (Cloudflare)
+                        throw CantReachExplorerException(url, code)
+                    }
                 }
             }
         }
     }
-    jsonObject["ens"]?.let {
-        if (it !is JsonObject) {
-            throw ENSMustBeObject()
-        }
-        if (it.keys != mutableSetOf("registry")) {
-            throw ENSMustHaveOnlyRegistry()
-        }
 
+    jsonObject["ens"]?.let {
+        if (it !is JsonObject) throw ENSMustBeObject()
+        if (it.keys != setOf("registry")) throw ENSMustHaveOnlyRegistry()
         val address = Address(it["registry"] as String)
-        if (!address.isValid()) {
-            throw ENSRegistryAddressMustBeValid()
-        }
+        if (!address.isValid()) throw ENSRegistryAddressMustBeValid()
     }
-    jsonObject["status"]?.let {
-        if (it !is String) {
-            throw StatusMustBeString()
-        }
-        if (!setOf("incubating", "active", "deprecated").contains(it)) {
-            throw StatusMustBeIncubatingActiveOrDeprecated()
-        }
+
+    jsonObject["status"]?.let { status ->
+        if (status !is String) throw StatusMustBeString()
+        if (status !in setOf("incubating", "active", "deprecated")) throw StatusMustBeIncubatingActiveOrDeprecated()
     }
 
     jsonObject["faucets"]?.let { faucets ->
-        if (faucets !is List<*>) {
-            throw FaucetsMustBeArray()
-        }
-
+        if (faucets !is List<*>) throw FaucetsMustBeArray()
         faucets.forEach {
-            if (it !is String) {
-                throw FaucetMustBeString()
-            }
-
+            if (it !is String) throw FaucetMustBeString()
             it.checkString("Faucet URL")
         }
-
     }
 
     jsonObject["redFlags"]?.let { redFlags ->
-        if (redFlags !is List<*>) {
-            throw RedFlagsMustBeArray()
-        }
+        if (redFlags !is List<*>) throw RedFlagsMustBeArray()
         redFlags.forEach {
-            if (it !is String) {
-                throw RedFlagMustBeString()
-            }
-
+            if (it !is String) throw RedFlagMustBeString()
             it.checkString("Red flag")
-            if (!allowedRedFlags.contains(it))
-                throw (InvalidRedFlags(it))
+            if (!allowedRedFlags.contains(it)) throw InvalidRedFlags(it)
         }
     }
 
-    jsonObject["parent"]?.let {
-        if (it !is JsonObject) {
-            throw ParentMustBeObject()
-        }
+    jsonObject["parent"]?.let { parentAny ->
+        val parent = parentAny as? JsonObject ?: throw ParentMustBeObject()
+        if (!parent.keys.containsAll(setOf("chain", "type"))) throw ParentMustHaveChainAndType()
 
-        if (!it.keys.containsAll(setOf("chain", "type"))) {
-            throw ParentMustHaveChainAndType()
-        }
+        val extraParentFields = parent.keys - setOf("chain", "type", "bridges")
+        if (extraParentFields.isNotEmpty()) throw ParentHasExtraFields(extraParentFields)
 
-        val extraParentFields = it.keys - setOf("chain", "type", "bridges")
-        if (extraParentFields.isNotEmpty()) {
-            throw ParentHasExtraFields(extraParentFields)
-        }
-
-
-        val bridges = it["bridges"]
-        if (bridges != null && bridges !is List<*>) {
-            throw ParentBridgeNoArray()
-        }
+        val bridges = parent["bridges"]
+        if (bridges != null && bridges !is List<*>) throw ParentBridgeNoArray()
         (bridges as? JsonArray<*>)?.forEach { bridge ->
-            if (bridge !is JsonObject) {
-                throw BridgeNoObject()
-            }
-            if (bridge.keys.size != 1 || bridge.keys.first() != "url") {
-                throw BridgeOnlyURL()
-            }
+            if (bridge !is JsonObject) throw BridgeNoObject()
+            if (bridge.keys.size != 1 || bridge.keys.first() != "url") throw BridgeOnlyURL()
         }
 
-        if (!setOf("L2", "shard").contains(it["type"])) {
-            throw ParentHasInvalidType(it["type"] as? String)
+        if (parent["type"] !in setOf("L2", "shard")) {
+            throw ParentHasInvalidType(parent["type"] as? String)
         }
 
-        if (!File(chainFile.parentFile, it["chain"] as String + ".json").exists()) {
-            throw ParentChainDoesNotExist(it["chain"] as String)
-        }
-
+        val parentFile = File(chainFile.parentFile, "${parent["chain"]}.json")
+        if (!parentFile.exists()) throw ParentChainDoesNotExist(parent["chain"] as String)
     }
 
+    // Moshi parse validates trailing commas etc.
     parseWithMoshi(chainFile)
 
-    if (jsonObject["rpc"] !is List<*>) {
-        throw (RPCMustBeList())
-    } else {
-        (jsonObject["rpc"] as List<*>).forEach { rpcURL ->
-            if (rpcURL !is String) {
-                throw (RPCMustBeListOfStrings())
-            } else if (rpcPrefixes.none { prefix -> rpcURL.startsWith(prefix) }) {
-                throw (InvalidRPCPrefix(rpcURL))
-            } else {
-                rpcURL.checkString("RPC URL")
-                if (onlineCheck) {
-                    var chainId: BigInteger? = null
-                    try {
-                        println("connecting to $rpcURL")
-                        val ethereumRPC = HttpEthereumRPC(rpcURL)
+    val rpcList = jsonObject["rpc"] as? List<*> ?: throw RPCMustBeList()
+    rpcList.forEach { rpcURL ->
+        if (rpcURL !is String) throw RPCMustBeListOfStrings()
+        if (RPC_PREFIXES.none { rpcURL.startsWith(it) }) throw InvalidRPCPrefix(rpcURL)
+        rpcURL.checkString("RPC URL")
 
-                        println("Client:" + ethereumRPC.clientVersion())
-                        println("BlockNumber:" + ethereumRPC.blockNumber())
-                        println("GasPrice:" + ethereumRPC.gasPrice())
-
-                        chainId = ethereumRPC.chainId()?.value
-                    } catch (e: Exception) {
-
-                    }
-                    chainId?.let { nonNullChainId ->
-                        if (chainIdAsLong != nonNullChainId.toLong()) {
-                            error("RPC chainId (${nonNullChainId.toLong()}) does not match chainId from json ($chainIdAsLong)")
-                        }
-                    }
+        if (onlineCheck) {
+            var chainId: BigInteger? = null
+            try {
+                println("connecting to $rpcURL")
+                val ethereumRPC = HttpEthereumRPC(rpcURL)
+                println("Client:${ethereumRPC.clientVersion()}")
+                println("BlockNumber:${ethereumRPC.blockNumber()}")
+                println("GasPrice:${ethereumRPC.gasPrice()}")
+                chainId = ethereumRPC.chainId()?.value
+            } catch (_: Exception) {
+                // tolerate offline endpoints
+            }
+            chainId?.let { nonNull ->
+                if (chainIdAsLong != nonNull.toLong()) {
+                    error("RPC chainId (${nonNull.toLong()}) does not match chainId from json ($chainIdAsLong)")
                 }
             }
         }
     }
 }
 
-private fun processIcon(it: Any, chainFile: File): Boolean {
-    if (it !is String) {
-        error("icon must be string")
+private fun processIcon(value: Any, chainFile: File): Boolean {
+    val iconName = value as? String ?: error("icon must be string")
+    val iconFile = File(iconsPath, "$iconName.json")
+    if (!iconFile.exists()) {
+        error("The Icon $iconName does not exist - used in ${chainFile.name}")
     }
-    if (!File(iconsPath, "$it.json").exists()) {
-        error("The Icon $it does not exist - was used in ${chainFile.name}")
-    }
-    return allUsedIcons.add(it)
+    return allUsedIcons.add(iconName)
 }
 
 private fun String.checkString(which: String) {
-    if (isBlank()) {
-        throw StringCannotBeBlank(which)
-    }
-
-    if (trim() != this) {
-        throw StringCannotHaveExtraSpaces(which)
-    }
+    if (isBlank()) throw StringCannotBeBlank(which)
+    if (trim() != this) throw StringCannotHaveExtraSpaces(which)
 }
 
-fun String.normalizeName() = replace(" ", "").uppercase()
+private fun String.normalizeName() = replace(" ", "").uppercase()
 
 /*
 moshi fails for extra commas
 https://github.com/ethereum-lists/chains/issues/126
 */
 private fun parseWithMoshi(fileToParse: File) {
-    val parsedChain = chainAdapter.fromJson(fileToParse.readText())
-    val parsedChainNormalizedName = parsedChain!!.name.normalizeName()
-    if (parsedNames.contains(parsedChainNormalizedName)) {
+    val parsedChain = chainAdapter.fromJson(fileToParse.readText()) ?: error("Cannot parse ${fileToParse.name}")
+    val parsedChainNormalizedName = parsedChain.name.normalizeName()
+    if (!parsedNames.add(parsedChainNormalizedName)) {
         throw NameMustBeUnique(parsedChainNormalizedName)
     }
-    parsedNames.add(parsedChainNormalizedName)
 
     val parsedChainNormalizedShortName = parsedChain.shortName.normalizeName()
-    if (parsedShortNames.contains(parsedChainNormalizedShortName)) {
+    if (parsedChainNormalizedShortName == "*") throw ShortNameMustNotBeStar()
+    if (!parsedShortNames.add(parsedChainNormalizedShortName)) {
         throw ShortNameMustBeUnique(parsedChainNormalizedShortName)
     }
-
-    if (parsedChainNormalizedShortName == "*") {
-        throw ShortNameMustNotBeStar()
-    }
-
-    parsedShortNames.add(parsedChainNormalizedShortName)
 }
 
-private fun getNumber(jsonObject: JsonObject, field: String): Long {
-    return when (val chainId = jsonObject[field]) {
-        is Int -> chainId.toLong()
-        is Long -> chainId
-        else -> throw (Exception("not a number at $field"))
+private fun getNumber(jsonObject: JsonObject, field: String): Long =
+    when (val v = jsonObject[field]) {
+        is Int -> v.toLong()
+        is Long -> v
+        is Number -> v.toLong()
+        else -> throw Exception("not a number at $field")
     }
-}
