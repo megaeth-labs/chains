@@ -1,8 +1,17 @@
-# EVM-based Chains
+# EVM-Based Chains
 
-The source data is in _data/chains. Each chain has its own file with the filename being the [CAIP-2](https://github.com/ChainAgnostic/CAIPs/blob/master/CAIPs/caip-2.md) representation as name and `.json` as extension.
+This repository hosts a community-maintained registry of EVM-compatible chains.  
+Each network is defined using a standardized JSON schema, stored under `_data/chains`, and named according to its [CAIP-2](https://github.com/ChainAgnostic/CAIPs/blob/master/CAIPs/caip-2.md) identifier.
 
-## Example:
+These definitions are relied upon by wallets, explorers, SDKs, infrastructure providers, and a wide ecosystem of Ethereum-compatible tools.
+
+---
+
+## 📁 Chain File Structure
+
+Each chain is represented by a dedicated JSON file containing metadata such as RPC endpoints, features, native currency details, and optional icon references.
+
+### Example
 
 ```json
 {
@@ -24,134 +33,170 @@ The source data is in _data/chains. Each chain has its own file with the filenam
   "chainId": 1,
   "networkId": 1,
   "icon": "ethereum",
-  "explorers": [{
-    "name": "etherscan",
-    "url": "https://etherscan.io",
-    "icon": "etherscan",
-    "standard": "EIP3091"
-  }]
+  "explorers": [
+    {
+      "name": "etherscan",
+      "url": "https://etherscan.io",
+      "icon": "etherscan",
+      "standard": "EIP3091"
+    }
+  ]
 }
 ```
 
-When an icon is used in either the network or an explorer, there must be a JSON in _data/icons with the name used.
-(e.g. in the above example there must be a `ethereum.json` and a `etherscan.json` in there) - The icon JSON files look like this:
+---
+
+## 🖼 Icons (Stored in `_data/icons`)
+
+If a chain or explorer defines an `icon`, a matching icon JSON file must exist.  
+Example (`ethereum.json`):
 
 ```json
-
 [
-    {
-      "url": "ipfs://QmdwQDr6vmBtXmK2TmknkEuZNoaDqTasFdZdu3DRw8b2wt",
-      "width": 1000,
-      "height": 1628,
-      "format": "png"
-    }
+  {
+    "url": "ipfs://QmdwQDr6vmBtXmK2TmknkEuZNoaDqTasFdZdu3DRw8b2wt",
+    "width": 1000,
+    "height": 1628,
+    "format": "png"
+  }
 ]
-
 ```
 
-where:
- * The URL MUST be publicly resolvable through IPFS
- * width and height MUST be positive integers
- * format is either "png", "jpg" or "svg"
- * size MUST be less than 250kb
+### Icon requirements
 
-If the chain is an L2 or a shard of another chain you can link it to the parent chain like this:
+- URL **must** be publicly accessible through IPFS  
+- `width` and `height` must be positive integers  
+- `format` must be `png`, `jpg`, or `svg`  
+- File size must be **< 250 KB**
 
+---
+
+## 🔗 Layered & Sharded Networks
+
+Layer-2 networks or shard chains may reference a parent chain:
 
 ```json
 {
   ...
   "parent": {
-   "type" : "L2",
-   "chain": "eip155-1",
-   "bridges": [ {"url":"https://bridge.arbitrum.io"} ]
+    "type": "L2",
+    "chain": "eip155-1",
+    "bridges": [{ "url": "https://bridge.arbitrum.io" }]
   }
 }
 ```
 
-where you need to specify the type and the reference to an existing parent. The field about bridges is optional.
+- `type` can be `L2`, `shard`, etc.  
+- `chain` must reference an existing entry  
+- `bridges` is optional
 
-You can add a `status` field e.g. to deprecate (via status `deprecated`) a chain (a chain should never be deleted as this would open the door to replay attacks)
-Other options for `status` are `active` (default) or `incubating`
+---
 
-## Aggregation
+## 🏷 Chain Status
 
-There are also aggregated json files with all chains automatically assembled:
- * https://chainid.network/chains.json
- * https://chainid.network/chains_mini.json (miniaturized - fewer fields for smaller filesize)
+Chains can specify a `status`:
 
-## Constraints
+| Status        | Meaning |
+|---------------|---------|
+| `active`      | Default; recommended for production use |
+| `incubating`  | Early-stage or experimental chain |
+| `deprecated`  | No longer maintained or replaced |
 
- * the shortName and name MUST be unique - see e.g. EIP-3770 on why
- * if referencing a parent chain - the chain MUST exist in the repo
- * if using an IPFS CID for the icon - the CID MUST be retrievable via `ipfs get` - not only through some gateway (means please do not use pinata for now)
- * for more constraints you can look into the CI
+Chains **must never be deleted**, as that could enable replay attacks.
 
-## Collision management
+---
 
- We cannot allow more than one chain with the same chainID - this would open the door to replay attacks.
- The first pull request gets the chainID assigned. When creating a chain we can expect that you read EIP155 which states this repo.
- All pull requests trying to replace a chainID because they think their chain is better than the other will be closed.
- The only way to get a chain reassigned is when the old chain gets deprecated. This can e.g. be used for testnets that are short-lived. But then you will get the redFlag "reusedChainID" that should be displayed in clients to warn them about the dangers here.
+## 📦 Aggregated JSON Outputs
 
-## Getting your PR merged
-### before PR is submitted
+This repository automatically generates compiled chain lists:
 
-Before submitting a PR, please ensure all checks pass by running:
+- Full version → https://chainid.network/chains.json  
+- Mini version → https://chainid.network/chains_mini.json  
+
+These are widely consumed by tools and wallets.
+
+---
+
+## ⚠️ Validation Rules & Constraints
+
+To maintain integrity:
+
+- `name` and `shortName` **must be unique**  
+- Parent chains must **exist** inside the repository  
+- IPFS CIDs must be **retrievable via `ipfs get`**  
+- Only **one** chain may use a given `chainId`  
+  - Prevents replay attacks  
+  - The first valid PR receives that chainId  
+  - Attempts to override a claimed ID will be rejected  
+- Deprecated chains may free up their ID, but will be marked with `reusedChainID`  
+
+Additional constraints run automatically in CI.
+
+---
+
+## 🛠 Getting Your PR Merged
+
+### 1. Validate before submission
+
+Run the validation script:
 
 ```bash
-$ ./gradlew run
-
-BUILD SUCCESSFUL in 7s
-9 actionable tasks: 9 executed
+./gradlew run
 ```
 
-Additionally, run Prettier to format your JSON according to the style [defined here ](https://github.com/ethereum-lists/chains/blob/master/.prettierrc.json)
-e.g. run
+Run Prettier to format JSON:
 
-```
+```bash
 npx prettier --write _data/*/*.json
 ```
 
-### Once PR is submitted
+---
 
- * Make sure CI is green. There will likely be no review when the CI is red.
- * When making changes that fix the CI problems - please re-request a review - otherwise it is too much work to track such changes with so many PRs daily
+### 2. After submitting your PR
 
-## Usages
-### Tools
- * [MESC](https://paradigmxyz.github.io/mesc)
+- Ensure the **CI is green**  
+- If you push any fixes, **re-request review**  
+- Keep PRs focused and minimal  
 
-### Explorers
- * [Otterscan](https://otterscan.io)
+---
 
-### Wallets
- * [WallETH](https://walleth.org)
- * [TREZOR](https://trezor.io)
- * [Minerva Wallet](https://minerva.digital)
+## 🔧 Integrations & Ecosystem Usage
 
-### EIPs
- * EIP-155
- * EIP-3014
- * EIP-3770
- * EIP-4527
+### Tools  
+- MESC
 
-### Listing sites
- * [chainid.network](https://chainid.network) / [chainlist.wtf](https://chainlist.wtf)
- * [chainlist.org](https://chainlist.org)
- * [Chainlink docs](https://docs.chain.link/)
- * [dRPC Chainlist - Load-balanced public nodes](https://drpc.org/chainlist)
- * [eth-chains](https://github.com/taylorjdawson/eth-chains)
- * [EVM-BOX](https://github.com/izayl/evm-box)
- * [evmchain.info](https://evmchain.info)
- * [evmchainlist.org](https://evmchainlist.org)
- * [networks.vercel.app](https://networks.vercel.app)
- * [Wagmi compatible chain configurations](https://spenhouet.com/chains)
- * [chainlist.simplr.sh - Info packaged single pager](https://chainlist.simplr.sh)
+### Explorers  
+- Otterscan
 
-### Other
- * [FaucETH](https://github.com/komputing/FaucETH)
- * [Sourcify playground](https://playground.sourcify.dev)
- * [Smart Contract UI](https://xtools-at.github.io/smartcontract-ui)
+### Wallets  
+- WallETH  
+- TREZOR  
+- Minerva Wallet
 
- * Your project - contact us to add it here!
+### Relevant EIPs  
+- EIP-155  
+- EIP-3014  
+- EIP-3770  
+- EIP-4527  
+
+### Chain Listing Sites  
+- chainid.network / chainlist.wtf  
+- chainlist.org  
+- Chainlink docs  
+- dRPC chainlist  
+- eth-chains  
+- EVM-BOX  
+- evmchain.info  
+- evmchainlist.org  
+- networks.vercel.app  
+- Wagmi compatible configs  
+- chainlist.simplr.sh  
+
+### Other tools  
+- FaucETH  
+- Sourcify Playground  
+- Smart Contract UI  
+
+Want your project listed? Open a PR!
+
+---
